@@ -116,6 +116,8 @@ class Agent(object):
 
         episode = np.int16(0)
         self.step = np.int16(0)
+        self.neg_reward_counter = np.int16(0)
+        self.max_neg_rewards = np.int16(12)
         observation = None
         episode_reward = None
         episode_step = None
@@ -156,6 +158,7 @@ class Agent(object):
                             if self.processor is not None:
                                 observation = self.processor.process_observation(observation)
                             break
+                        
 
                 # At this point, we expect to be fully initialized.
                 assert episode_reward is not None
@@ -172,6 +175,7 @@ class Agent(object):
                 reward = np.float32(0)
                 accumulated_info = {}
                 done = False
+                #print(action_repetition)
                 for _ in range(action_repetition):
                     callbacks.on_action_begin(action)
                     observation, r, done, info = env.step(action)
@@ -188,6 +192,11 @@ class Agent(object):
                     reward += r
                     if done:
                         break
+                early_done, punishment = self.check_early_stop(reward, episode_reward)
+                if early_done:
+                    reward += punishment
+                done = done or early_done
+
                 if nb_max_episode_steps and episode_step >= nb_max_episode_steps - 1:
                     # Force a terminal state.
                     done = True
@@ -400,6 +409,28 @@ class Agent(object):
         """Resets all internally kept states after an episode is completed.
         """
         pass
+
+
+
+    def check_early_stop(self, reward, totalreward):
+
+        if reward < 0:
+            self.neg_reward_counter += 1
+            done = (self.neg_reward_counter > self.max_neg_rewards)
+
+            if done and totalreward <= 500:
+                punishment = -20.0
+            else:
+                punishment = 0.0
+            if done:
+                self.neg_reward_counter = 0
+
+
+            return done, punishment
+        else:
+            self.neg_reward_counter = 0
+            return False, 0.0
+
 
     def forward(self, observation):
         """Takes the an observation from the environment and returns the action to be taken next.
@@ -705,3 +736,7 @@ class Space(object):
         """Return boolean specifying if x is a valid member of this space
         """
         raise NotImplementedError()
+
+
+
+ 
