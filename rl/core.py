@@ -13,7 +13,12 @@ from rl.callbacks import (
     Visualizer
 )
 
+from rl.amdp import AMDP
 
+import tensorflow as tf
+import math
+import pickle
+#import keras.layers.core.Reshape()
 class Agent(object):
     """Abstract base class for all implemented agents.
 
@@ -51,7 +56,7 @@ class Agent(object):
         return {}
 
     def fit(self, env, nb_steps, action_repetition=1, callbacks=None, verbose=1,
-            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000,
+            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useVaeSA=False, stateToBucket=None, vae=None,
             nb_max_episode_steps=None):
         """Trains the agent on the given environment.
 
@@ -86,7 +91,13 @@ class Agent(object):
         if action_repetition < 1:
             raise ValueError('action_repetition must be >= 1, is {}'.format(action_repetition))
 
+       
         self.training = True
+        self.stateToBucket = stateToBucket
+
+        sess = vae[0]
+        vaeNetwork = vae[1]
+        self.printVae = False
 
         callbacks = [] if not callbacks else callbacks[:]
 
@@ -119,19 +130,38 @@ class Agent(object):
         self.neg_reward_counter = np.int16(0)
         self.max_neg_rewards = np.int16(12)
         observation = None
+        previousObservation = None
+
         episode_reward = None
         episode_step = None
         did_abort = False
+
+        if useVaeSA:
+            amdp = AMDP(alpha=0.1, gamma=0.995)
+        latentStatesVisited = []
+
+
+
+
+
+
         try:
             while self.step < nb_steps:
                 if observation is None:  # start of a new episode
                     callbacks.on_episode_begin(episode)
+                    previousObservation = None
+
                     episode_step = np.int16(0)
                     episode_reward = np.float32(0)
+                    self.accumulatedExtrinsicReward = 0
+                    self.accumulatedReward = 0
+                    self.accumulatedSteps = 0
+
 
                     # Obtain the initial observation by resetting the environment.
                     self.reset_states()
                     observation = deepcopy(env.reset())
+                    colourObservation = observation
                     if self.processor is not None:
                         observation = self.processor.process_observation(observation)
                     assert observation is not None
@@ -149,12 +179,14 @@ class Agent(object):
                         callbacks.on_action_begin(action)
                         observation, reward, done, info = env.step(action)
                         observation = deepcopy(observation)
+                        colourObservation = observation
                         if self.processor is not None:
                             observation, reward, done, info = self.processor.process_step(observation, reward, done, info)
                         callbacks.on_action_end(action)
                         if done:
                             warnings.warn('Env ended before {} random steps could be performed at the start. You should probably lower the `nb_max_start_steps` parameter.'.format(nb_random_start_steps))
                             observation = deepcopy(env.reset())
+                            colourObservation = observation
                             if self.processor is not None:
                                 observation = self.processor.process_observation(observation)
                             break
@@ -165,6 +197,10 @@ class Agent(object):
                 assert episode_step is not None
                 assert observation is not None
 
+                if useVaeSA:
+                
+                    initialLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: colourObservation[None, : , : , : ]})
+                    amdp.addState(self.stateToBucket(initialLatentState[0]))
                 # Run a single step.
                 callbacks.on_step_begin(episode_step)
                 # This is were all of the work happens. We first perceive and compute the action
@@ -175,13 +211,56 @@ class Agent(object):
                 reward = np.float32(0)
                 accumulated_info = {}
                 done = False
+                self.accumulatedExtrinsicReward=0
                 #print(action_repetition)
                 for _ in range(action_repetition):
                     callbacks.on_action_begin(action)
+                    previousObservation = observation
+                    previousColourObservation = colourObservation
                     observation, r, done, info = env.step(action)
-                    observation = deepcopy(observation)
+                    if self.printVae:
+                        
+                        sess = vae[0]
+                        vaeNetwork = vae[1]
+                        #print(vae.encoder(tf.image.resize_images(observation.reshape(1,96,96,3), [64, 64])))
+                        obs = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: observation[None, :,  :,  :]})
+                        #print(obs)
+                        latentStatesVisited.append(obs)
+
+                    self.accumulatedReward+=r
+                    self.accumulatedSteps+=1
+                    
+                   
+                    colourObservation = observation
+                    
+                    #print(observation.shape)
                     if self.processor is not None:
                         observation, r, done, info = self.processor.process_step(observation, r, done, info)
+
+                    
+
+
+                    if useVaeSA:
+                        currentLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: colourObservation[None, :, :, :]})
+                        previousLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: previousColourObservation[None, :, :, :]})
+                        currentAbstractState = self.stateToBucket(currentLatentState[0])
+                        previousAbstractState = self.stateToBucket(previousLatentState[0])
+
+                       # print(currentLatentState, previousLatentState)
+                        #print(currentAbstractState, previousAbstractState)
+                        if not currentAbstractState == previousAbstractState:
+                            amdp.addState(currentAbstractState)
+                            amdp.valueUpdate(previousAbstractState, self.accumulatedReward, currentAbstractState, self.accumulatedSteps) ##### MAybe try extra discounting if needed. 
+                            self.accumulatedExtrinsicReward += amdp.gamma*amdp.value(currentAbstractState)-amdp.value(previousAbstractState)
+                            #print(self.accumulatedReward, self.accumulatedSteps, currentAbstractState)
+                            self.accumulatedReward = 0
+                            self.accumulatedSteps = 0
+
+
+                            
+
+
+
                     for key, value in info.items():
                         if not np.isreal(value):
                             continue
@@ -192,6 +271,8 @@ class Agent(object):
                     reward += r
                     if done:
                         break
+
+
                 early_done, punishment = self.check_early_stop(reward, episode_reward)
                 if early_done:
                     reward += punishment
@@ -200,7 +281,10 @@ class Agent(object):
                 if nb_max_episode_steps and episode_step >= nb_max_episode_steps - 1:
                     # Force a terminal state.
                     done = True
-                metrics = self.backward(reward, terminal=done)
+
+                #if not currentAbstractState == previousAbstractState:
+                #print(self.accumulatedExtrinsicReward)
+                metrics = self.backward(reward+self.accumulatedExtrinsicReward, terminal=done)
                 episode_reward += reward
 
                 step_logs = {
@@ -244,6 +328,9 @@ class Agent(object):
         callbacks.on_train_end(logs={'did_abort': did_abort})
         self._on_train_end()
 
+        with open('latentVisited2.pickle', 'wb') as handle:
+            pickle.dump(latentStatesVisited, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        
         return history
 
     def test(self, env, nb_episodes=1, action_repetition=1, callbacks=None, visualize=True,
@@ -332,7 +419,6 @@ class Agent(object):
                     action = self.processor.process_action(action)
                 callbacks.on_action_begin(action)
                 observation, r, done, info = env.step(action)
-                observation = deepcopy(observation)
                 if self.processor is not None:
                     observation, r, done, info = self.processor.process_step(observation, r, done, info)
                 callbacks.on_action_end(action)
@@ -413,7 +499,7 @@ class Agent(object):
 
 
     def check_early_stop(self, reward, totalreward):
-
+        #return False, 0.0
         if reward < 0:
             self.neg_reward_counter += 1
             done = (self.neg_reward_counter > self.max_neg_rewards)
