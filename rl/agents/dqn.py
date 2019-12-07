@@ -207,6 +207,7 @@ class DQNAgent(AbstractDQNAgent):
 
     def load_weights(self, filepath):
         self.model.load_weights(filepath)
+        print("loaded weights")
         self.update_target_model_hard()
 
     def save_weights(self, filepath, overwrite=False):

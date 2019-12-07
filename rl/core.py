@@ -56,7 +56,7 @@ class Agent(object):
         return {}
 
     def fit(self, env, nb_steps, action_repetition=1, callbacks=None, verbose=1,
-            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useVaeSA=False, stateToBucket=None, vae=None,
+            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None,
             nb_max_episode_steps=None):
         """Trains the agent on the given environment.
 
@@ -86,6 +86,21 @@ class Agent(object):
         # Returns
             A `keras.callbacks.History` instance that recorded the entire training process.
         """
+
+        fittingMode = ""
+        if not useShaping and not learnAMDP:
+            fittingMode="NoShaping"
+        elif learnAMDP and not useShaping:
+            fittingMode="learnAMDP"
+        elif learnAMDP and useShaping:
+            fittingMode="learnAndUseAMDP"
+        elif useShaping and not shapingFunction is None:
+            fittingMode="useShapingFunction"
+        else:
+            raise Exception("Invalid Combination of Options")
+
+        print(fittingMode)
+
         if not self.compiled:
             raise RuntimeError('Your tried to fit your agent but it hasn\'t been compiled yet. Please call `compile()` before `fit()`.')
         if action_repetition < 1:
@@ -136,8 +151,8 @@ class Agent(object):
         episode_step = None
         did_abort = False
 
-        if useVaeSA:
-            amdp = AMDP(alpha=0.1, gamma=0.995)
+        if fittingMode in ["learnAMDP", "learnAndUseAMDP"]:
+            self.amdp = AMDP(alpha=0.1, gamma=0.995)
         latentStatesVisited = []
 
 
@@ -197,10 +212,10 @@ class Agent(object):
                 assert episode_step is not None
                 assert observation is not None
 
-                if useVaeSA:
-                
+                if fittingMode in ["learnAMDP","learnAndUseAMDP", "useShapingFunction"]:
                     initialLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: colourObservation[None, : , : , : ]})
-                    amdp.addState(self.stateToBucket(initialLatentState[0]))
+                    if fittingMode in ["learnAMDP", "learnAndUseAMDP"]:
+                        self.amdp.addState(self.stateToBucket(initialLatentState[0]))
                 # Run a single step.
                 callbacks.on_step_begin(episode_step)
                 # This is were all of the work happens. We first perceive and compute the action
@@ -240,19 +255,24 @@ class Agent(object):
                     
 
 
-                    if useVaeSA:
+                    if fittingMode in ["learnAndUseAMDP", "learnAMDP", "useShapingFunction"]:
                         currentLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: colourObservation[None, :, :, :]})
                         previousLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: previousColourObservation[None, :, :, :]})
                         currentAbstractState = self.stateToBucket(currentLatentState[0])
                         previousAbstractState = self.stateToBucket(previousLatentState[0])
 
-                       # print(currentLatentState, previousLatentState)
                         #print(currentAbstractState, previousAbstractState)
                         if not currentAbstractState == previousAbstractState:
-                            amdp.addState(currentAbstractState)
-                            amdp.valueUpdate(previousAbstractState, self.accumulatedReward, currentAbstractState, self.accumulatedSteps) ##### MAybe try extra discounting if needed. 
-                            self.accumulatedExtrinsicReward += amdp.gamma*amdp.value(currentAbstractState)-amdp.value(previousAbstractState)
-                            #print(self.accumulatedReward, self.accumulatedSteps, currentAbstractState)
+
+
+                            if fittingMode in ["learnAndUseAMDP", "learnAMDP"]:
+                                self.amdp.addState(currentAbstractState)
+                                self.amdp.valueUpdate(previousAbstractState, self.accumulatedReward, currentAbstractState, self.accumulatedSteps) ##### MAybe try extra discounting if needed. 
+                                self.accumulatedExtrinsicReward += self.amdp.gamma*self.amdp.value(currentAbstractState)-self.amdp.value(previousAbstractState)
+                                #print(self.accumulatedReward, self.accumulatedSteps, currentAbstractState)
+                            elif fittingMode in ["useShapingFunction"]:
+                                self.accumulatedExtrinsicReward += self.gamma*shapingFunction[currentAbstractState]-shapingFunction[previousAbstractState]
+
                             self.accumulatedReward = 0
                             self.accumulatedSteps = 0
 
@@ -284,7 +304,11 @@ class Agent(object):
 
                 #if not currentAbstractState == previousAbstractState:
                 #print(self.accumulatedExtrinsicReward)
-                metrics = self.backward(reward+self.accumulatedExtrinsicReward, terminal=done)
+                if fittingMode in ["learnAndUseAMDP", "useShapingFunction"]:
+                    metrics = self.backward(reward+self.accumulatedExtrinsicReward, terminal=done)
+                else:
+                    metrics = self.backward(reward, terminal=done)
+                #
                 episode_reward += reward
 
                 step_logs = {
