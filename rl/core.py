@@ -56,7 +56,7 @@ class Agent(object):
         return {}
 
     def fit(self, env, nb_steps, action_repetition=1, callbacks=None, verbose=1,
-            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None,
+            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None, omega=0,
             nb_max_episode_steps=None):
         """Trains the agent on the given environment.
 
@@ -152,7 +152,7 @@ class Agent(object):
         did_abort = False
 
         if fittingMode in ["learnAMDP", "learnAndUseAMDP"]:
-            self.amdp = AMDP(alpha=0.1, gamma=0.995)
+            self.amdp = AMDP(alpha=0.1, gamma=0.995, numberActions=env.action_space.n)
         latentStatesVisited = []
 
 
@@ -267,11 +267,18 @@ class Agent(object):
 
                             if fittingMode in ["learnAndUseAMDP", "learnAMDP"]:
                                 self.amdp.addState(currentAbstractState)
-                                self.amdp.valueUpdate(previousAbstractState, self.accumulatedReward, currentAbstractState, self.accumulatedSteps) ##### MAybe try extra discounting if needed. 
-                                self.accumulatedExtrinsicReward += self.amdp.gamma*self.amdp.value(currentAbstractState)-self.amdp.value(previousAbstractState)
+                                self.amdp.qValueUpdate(previousAbstractState, action, self.accumulatedReward, currentAbstractState, self.accumulatedSteps) ##### MAybe try extra discounting if needed. 
+                                self.accumulatedExtrinsicReward += self.amdp.gamma*self.amdp.qValue(currentAbstractState, self.forward(observation))-self.amdp.qValue(previousAbstractState, action)
                                 #print(self.accumulatedReward, self.accumulatedSteps, currentAbstractState)
                             elif fittingMode in ["useShapingFunction"]:
-                                self.accumulatedExtrinsicReward += self.gamma*shapingFunction[currentAbstractState]-shapingFunction[previousAbstractState]
+                                try:
+                                    currentAbstractStateIndex = shapingFunction[0].index(currentAbstractState)
+                                    previousAbstractStateIndex = shapingFunction[0].index(previousAbstractState)
+                                    self.accumulatedExtrinsicReward += self.gamma*shapingFunction[1][currentAbstractStateIndex][self.forward(observation)]-shapingFunction[1][previousAbstractStateIndex][action]
+                                    #print(previousAbstractStateIndex,currentAbstractStateIndex, self.gamma*shapingFunction[1][currentAbstractStateIndex][self.forward(observation)]-shapingFunction[1][previousAbstractStateIndex][action], r)
+                                except:
+                                    pass
+
 
                             self.accumulatedReward = 0
                             self.accumulatedSteps = 0
@@ -305,7 +312,8 @@ class Agent(object):
                 #if not currentAbstractState == previousAbstractState:
                 #print(self.accumulatedExtrinsicReward)
                 if fittingMode in ["learnAndUseAMDP", "useShapingFunction"]:
-                    metrics = self.backward(reward+self.accumulatedExtrinsicReward, terminal=done)
+                    print(omega*self.accumulatedExtrinsicReward)
+                    metrics = self.backward(reward+omega*self.accumulatedExtrinsicReward, terminal=done)
                 else:
                     metrics = self.backward(reward, terminal=done)
                 #
