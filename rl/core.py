@@ -312,7 +312,7 @@ class Agent(object):
                 #if not currentAbstractState == previousAbstractState:
                 #print(self.accumulatedExtrinsicReward)
                 if fittingMode in ["learnAndUseAMDP", "useShapingFunction"]:
-                    print(omega*self.accumulatedExtrinsicReward)
+                    #print(omega*self.accumulatedExtrinsicReward)
                     metrics = self.backward(reward+omega*self.accumulatedExtrinsicReward, terminal=done)
                 else:
                     metrics = self.backward(reward, terminal=done)
