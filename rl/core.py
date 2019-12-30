@@ -57,7 +57,7 @@ class Agent(object):
 
     def fit(self, env, nb_steps, action_repetition=1, callbacks=None, verbose=1,
             visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None, omega=0,
-            nb_max_episode_steps=None):
+            nb_max_episode_steps=None, projectionModel=None):
         """Trains the agent on the given environment.
 
         # Arguments
@@ -94,11 +94,14 @@ class Agent(object):
             fittingMode="learnAMDP"
         elif learnAMDP and useShaping:
             fittingMode="learnAndUseAMDP"
-        elif useShaping and not shapingFunction is None:
+        elif useShaping and not shapingFunction is None and projectionModel is None:
             fittingMode="useShapingFunction"
+        elif useShaping and not projectionModel is None and shapingFunction is None:
+            fittingMode="useProjectionModel"
         else:
             raise Exception("Invalid Combination of Options")
 
+        print("Fitting Mode Is:")
         print(fittingMode)
 
         if not self.compiled:
@@ -109,6 +112,10 @@ class Agent(object):
        
         self.training = True
         self.stateToBucket = stateToBucket
+        if not projectionModel is None:
+            self.projectionModel= projectionModel[0]
+            self.projectionGraph = projectionModel[1]
+            self.projectionSession = projectionModel[2]
 
         sess = vae[0]
         vaeNetwork = vae[1]
@@ -156,7 +163,7 @@ class Agent(object):
         latentStatesVisited = []
 
 
-
+        episodeStateHistory=[]
 
 
 
@@ -171,6 +178,7 @@ class Agent(object):
                     self.accumulatedExtrinsicReward = 0
                     self.accumulatedReward = 0
                     self.accumulatedSteps = 0
+                    episodeStateHistory=[]
 
 
                     # Obtain the initial observation by resetting the environment.
@@ -180,7 +188,7 @@ class Agent(object):
                     if self.processor is not None:
                         observation = self.processor.process_observation(observation)
                     assert observation is not None
-
+                    episodeStateHistory.append(observation)
                     # Perform random starts at beginning of episode and do not record them into the experience.
                     # This slightly changes the start position between games.
                     nb_random_start_steps = 0 if nb_max_start_steps == 0 else np.random.randint(nb_max_start_steps)
@@ -197,6 +205,7 @@ class Agent(object):
                         colourObservation = observation
                         if self.processor is not None:
                             observation, reward, done, info = self.processor.process_step(observation, reward, done, info)
+                        episodeStateHistory.append(observation)
                         callbacks.on_action_end(action)
                         if done:
                             warnings.warn('Env ended before {} random steps could be performed at the start. You should probably lower the `nb_max_start_steps` parameter.'.format(nb_random_start_steps))
@@ -226,13 +235,16 @@ class Agent(object):
                 reward = np.float32(0)
                 accumulated_info = {}
                 done = False
-                self.accumulatedExtrinsicReward=0
+
+                self.accumulatedExtrinsicReward=0             ### 
                 #print(action_repetition)
                 for _ in range(action_repetition):
+
                     callbacks.on_action_begin(action)
                     previousObservation = observation
                     previousColourObservation = colourObservation
                     observation, r, done, info = env.step(action)
+
                     if self.printVae:
                         
                         sess = vae[0]
@@ -251,15 +263,6 @@ class Agent(object):
                     #print(observation.shape)
                     if self.processor is not None:
                         observation, r, done, info = self.processor.process_step(observation, r, done, info)
-
-                    
-
-
-                    if fittingMode in ["learnAndUseAMDP", "learnAMDP", "useShapingFunction"]:
-                        currentLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: colourObservation[None, :, :, :]})
-                        previousLatentState = sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: previousColourObservation[None, :, :, :]})
-                        currentAbstractState = self.stateToBucket(currentLatentState[0])
-                        previousAbstractState = self.stateToBucket(previousLatentState[0])
 
                         #print(currentAbstractState, previousAbstractState)
                         if not currentAbstractState == previousAbstractState:
@@ -282,11 +285,7 @@ class Agent(object):
 
                             self.accumulatedReward = 0
                             self.accumulatedSteps = 0
-
-
-                            
-
-
+                        
 
                     for key, value in info.items():
                         if not np.isreal(value):
@@ -300,6 +299,46 @@ class Agent(object):
                         break
 
 
+
+                if fittingMode in ["useProjectionModel"]:
+                        with self.projectionGraph.as_default():
+                            with self.projectionSession.as_default():
+                                
+                                if len(episodeStateHistory) < 4:
+                                    
+                                    if len(episodeStateHistory) ==0:
+                                        stackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape),observation])
+                                        previousStackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape)])
+                                    elif len(episodeStateHistory) == 1:
+                                        stackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), episodeStateHistory[-1], observation])
+                                        previousStackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape), episodeStateHistory[-1]])
+                                    elif len(episodeStateHistory) == 2:
+                                        stackedObservations = np.array([np.zeros(observation.shape), episodeStateHistory[-2], episodeStateHistory[-1], observation])
+                                        previousStackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), episodeStateHistory[-2], episodeStateHistory[-1]])
+                                    elif len(episodeStateHistory) == 3:
+                                        stackedObservations = np.array([episodeStateHistory[-3], episodeStateHistory[-2], episodeStateHistory[-1], observation])
+                                        previousStackedObservations = np.array([np.zeros(observation.shape), episodeStateHistory[-3], episodeStateHistory[-2], episodeStateHistory[-1]])
+
+                                    #stackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape),observation])
+                                    #previousStackedObservations = np.array([np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape), np.zeros(observation.shape)])
+                                else: 
+                                    stackedObservations = np.array([episodeStateHistory[-3],episodeStateHistory[-2],episodeStateHistory[-1],observation])
+                                    previousStackedObservations = np.array([episodeStateHistory[-4] ,episodeStateHistory[-3],episodeStateHistory[-2],episodeStateHistory[-1]])
+
+
+                            
+                                potentialCurrentState = max(self.projectionModel.predict(np.array([stackedObservations]))[0])
+                                potentialPreviousState =  max(self.projectionModel.predict(np.array([previousStackedObservations]))[0])
+                                discountedDifference = self.gamma*potentialCurrentState-potentialPreviousState
+                                #print(discountedDifference)
+
+
+                            #potentialNewCurrentState = max(self.model.predict(np.array([observation]))[0])
+
+
+                            #print(potentialCurrentState, potentialNewCurrentState)
+                            self.accumulatedExtrinsicReward= discountedDifference
+
                 early_done, punishment = self.check_early_stop(reward, episode_reward)
                 if early_done:
                     reward += punishment
@@ -311,8 +350,10 @@ class Agent(object):
 
                 #if not currentAbstractState == previousAbstractState:
                 #print(self.accumulatedExtrinsicReward)
-                if fittingMode in ["learnAndUseAMDP", "useShapingFunction"]:
+                episodeStateHistory.append(observation)
+                if fittingMode in ["learnAndUseAMDP", "useShapingFunction", "useProjectionModel"]:
                     #print(omega*self.accumulatedExtrinsicReward)
+                    #print(self.accumulatedExtrinsicReward)
                     metrics = self.backward(reward+omega*self.accumulatedExtrinsicReward, terminal=done)
                 else:
                     metrics = self.backward(reward, terminal=done)

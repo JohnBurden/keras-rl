@@ -207,7 +207,6 @@ class DQNAgent(AbstractDQNAgent):
 
     def load_weights(self, filepath):
         self.model.load_weights(filepath)
-        print("loaded weights")
         self.update_target_model_hard()
 
     def save_weights(self, filepath, overwrite=False):
@@ -217,7 +216,7 @@ class DQNAgent(AbstractDQNAgent):
         self.recent_action = None
         self.recent_observation = None
         if self.compiled:
-            self.model.reset_states()
+            self.model.reset_states()  
             self.target_model.reset_states()
 
     def update_target_model_hard(self):
