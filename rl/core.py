@@ -119,6 +119,11 @@ class Agent(object):
             self.projectionGraph = projectionModel[1]
             self.projectionSession = projectionModel[2]
 
+        if not shapingFunction is None:
+            self.shapingModel = shapingFunction[0]
+            self.shapingGraph = shapingFunction[1]
+            self.shapingSession = shapingFunction[2]
+
         sess = vae[0]
         vaeNetwork = vae[1]
         self.printVae = False
@@ -189,6 +194,7 @@ class Agent(object):
                     self.reset_states()
                     observation = deepcopy(env.reset())
                     colourObservation = observation
+
                     if self.processor is not None:
                         observation = self.processor.process_observation(observation)
                     assert observation is not None
@@ -261,6 +267,7 @@ class Agent(object):
                     
                    
                     colourObservation = observation
+                    #self.colourMemory.append(colourObservation,0,0,0)
                     
                     #print(observation.shape)
                     if self.processor is not None:
@@ -309,7 +316,8 @@ class Agent(object):
                                 potentialCurrentState = max(self.projectionModel.predict(np.array([stackedObservations]))[0])
                                 potentialPreviousState =  max(self.projectionModel.predict(np.array([previousStackedObservations]))[0])
                                 discountedDifference = self.gamma*potentialCurrentState-potentialPreviousState
-                         
+                                #print(discountedDifference)
+
                     elif fittingMode in ["useShapingFunction", "learnAMDP"]:
 
 
@@ -333,18 +341,37 @@ class Agent(object):
                             previousStackedObservations = np.array([episodeColourStateHistory[-4] ,episodeColourStateHistory[-3],episodeColourStateHistory[-2],episodeColourStateHistory[-1]])
 
                         latentCurrentState = [sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: obs[None, :,  :,  :]}).tolist()[0] for obs in stackedObservations]
-                        latentCurrentState = list(chain.from_iterable(latentCurrentState))
                         latentPreviousState = [sess.run(vaeNetwork.z, feed_dict={vaeNetwork.image: obs[None, :,  :,  :]}).tolist()[0] for obs in previousStackedObservations]
-                        latentPreviousState = list(chain.from_iterable(latentPreviousState))
+                        #latentPreviousState = list(chain.from_iterable(latentPreviousState))
 
+                        if fittingMode in ["useShapingFunction"]:
+                            with self.shapingGraph.as_default():
+                                with self.shapingSession.as_default():
+                                    #print(np.array(latentCurrentState).shape)
+                                    latentCurrentState = np.array(latentCurrentState)
+                                    latentPreviousState = np.array(latentPreviousState)
+                            
+                        
+
+                                    latentCurrentState = latentCurrentState.reshape((-1,4,4))
+                                    latentPreviousState = latentPreviousState.reshape((-1,4,4))
+                                    #print(np.array(latentCurrentState).shape)
+                                        
+                                    potentialCurrentLatentState = max(self.shapingModel.predict(latentCurrentState)[0])
+                                    potentialPreviousLatentState = max(self.shapingModel.predict(latentPreviousState)[0])
+                                    #print(potentialCurrentLatentState, potentialPreviousLatentState)
+                                    discountedDifference = self.gamma*potentialCurrentLatentState-potentialPreviousLatentState
+                                    #discountedDifference = np.clip(discountedDifference, -10000, 10000)
+                                    #print(discountedDifference)
 
                         if fittingMode in ["learnAMDP"]:
                             #print(latentCurrentState)
                            # print(np.array(latentCurrentState).shape)
                             self.amdp.addExperience(np.array(latentCurrentState), action, reward, done)
 #                        discountedDifference = self.gamma*potentialCurrentState-potentialPreviousState
-                        discountedDifference = 0
+                            discountedDifference = 0
                     self.accumulatedExtrinsicReward= discountedDifference
+                    #print(self.accumulatedExtrinsicReward)
 
                 early_done, punishment = self.check_early_stop(reward, episode_reward)
                 if early_done:
@@ -358,8 +385,10 @@ class Agent(object):
                 #if not currentAbstractState == previousAbstractState:
                 #print(self.accumulatedExtrinsicReward)
                 episodeStateHistory.append(observation)
+                episodeColourStateHistory.append(colourObservation)
                 if fittingMode in ["learnAndUseAMDP", "useShapingFunction", "useProjectionModel"]:
                     #print(omega*self.accumulatedExtrinsicReward)
+                    #print(self.accumulatedExtrinsicReward)
                     #print(self.accumulatedExtrinsicReward)
                     metrics = self.backward(reward+omega*self.accumulatedExtrinsicReward, terminal=done)
                 elif fittingMode in ["learnAMDP"]:
@@ -455,6 +484,9 @@ class Agent(object):
         self.training = False
         self.step = 0
 
+        episodeObservationHistory = []
+        observationHistory = []
+
         callbacks = [] if not callbacks else callbacks[:]
 
         if verbose >= 1:
@@ -480,6 +512,7 @@ class Agent(object):
         self._on_test_begin()
         callbacks.on_train_begin()
         for episode in range(nb_episodes):
+            observationHistory = []
             callbacks.on_episode_begin(episode)
             episode_reward = 0.
             episode_step = 0
@@ -487,6 +520,7 @@ class Agent(object):
             # Obtain the initial observation by resetting the environment.
             self.reset_states()
             observation = deepcopy(env.reset())
+            observationHistory.append(observation)
             if self.processor is not None:
                 observation = self.processor.process_observation(observation)
             assert observation is not None
@@ -503,6 +537,7 @@ class Agent(object):
                     action = self.processor.process_action(action)
                 callbacks.on_action_begin(action)
                 observation, r, done, info = env.step(action)
+                observationHistory.append(observation)
                 if self.processor is not None:
                     observation, r, done, info = self.processor.process_step(observation, r, done, info)
                 callbacks.on_action_end(action)
@@ -526,6 +561,7 @@ class Agent(object):
                 for _ in range(action_repetition):
                     callbacks.on_action_begin(action)
                     observation, r, d, info = env.step(action)
+                    observationHistory.append(observation)
                     observation = deepcopy(observation)
                     if self.processor is not None:
                         observation, r, d, info = self.processor.process_step(observation, r, d, info)
@@ -542,6 +578,12 @@ class Agent(object):
                         break
                 if nb_max_episode_steps and episode_step >= nb_max_episode_steps - 1:
                     done = True
+
+                early_done, punishment = self.check_early_stop(reward, episode_reward)
+                if early_done:
+                    reward += punishment
+                done = done or early_done
+
                 self.backward(reward, terminal=done)
                 episode_reward += reward
 
@@ -563,7 +605,7 @@ class Agent(object):
             # always non-terminal by convention.
             self.forward(observation)
             self.backward(0., terminal=False)
-
+            episodeObservationHistory.append(observationHistory)
             # Report end of episode.
             episode_logs = {
                 'episode_reward': episode_reward,
@@ -572,6 +614,15 @@ class Agent(object):
             callbacks.on_episode_end(episode, episode_logs)
         callbacks.on_train_end()
         self._on_test_end()
+
+        print(episodeObservationHistory)
+
+        with open('observationHistory.pickle', 'wb') as handle:
+            pickle.dump(episodeObservationHistory, handle, pickle.HIGHEST_PROTOCOL)
+
+        with open('observationHistory.pickle', 'rb') as handle:
+            eoh = pickle.load(handle)
+            print(len(eoh))
 
         return history
 

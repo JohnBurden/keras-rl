@@ -8,6 +8,7 @@ from keras.layers import Lambda, Input, Layer, Dense
 from rl.core import Agent
 from rl.policy import EpsGreedyQPolicy, GreedyQPolicy
 from rl.util import *
+from rl.memory import SequentialMemory
 
 
 def mean_q(y_true, y_pred):
@@ -49,6 +50,7 @@ class AbstractDQNAgent(Agent):
 
         # Related objects.
         self.memory = memory
+        self.colourMemory =  SequentialMemory(limit=100000, window_length=4)
 
         # State.
         self.compiled = False
@@ -108,6 +110,7 @@ class DQNAgent(AbstractDQNAgent):
         if hasattr(model.output, '__len__') and len(model.output) > 1:
             raise ValueError('Model "{}" has more than one output. DQN expects a model that has a single output.'.format(model))
         if model.output._keras_shape != (None, self.nb_actions):
+            print(model.output._keras_shape)
             raise ValueError('Model output "{}" has invalid shape. DQN expects a model that has one dimension for each action, in this case {}.'.format(model.output, self.nb_actions))
   
         # Parameters.
@@ -297,7 +300,7 @@ class DQNAgent(AbstractDQNAgent):
                 # outlined in Mnih (2015). In short: it makes the algorithm more stable.
                 target_q_values = self.target_model.predict_on_batch(state1_batch)
                 assert target_q_values.shape == (self.batch_size, self.nb_actions)
-                q_batch = np.max(target_q_values, axis=1).flatten()
+                q_batch = np.max(target_q_values, axis=1).flatten() 
             assert q_batch.shape == (self.batch_size,)
 
             targets = np.zeros((self.batch_size, self.nb_actions))
