@@ -18,8 +18,8 @@ def mean_q(y_true, y_pred):
 class AbstractDQNAgent(Agent):
     """Write me
     """
-    def __init__(self, nb_actions, memory, gamma=.99, batch_size=32, nb_steps_warmup=1000,
-                 train_interval=1, memory_interval=1, target_model_update=10000,
+    def __init__(self, nb_actions, memory, gamma=.99, omega=(1,1,1), batch_size=32, nb_steps_warmup=1000,
+                 train_interval=1, memory_interval=1, target_model_update=10000, 
                  delta_range=None, delta_clip=np.inf, custom_model_objects={}, **kwargs):
         super(AbstractDQNAgent, self).__init__(**kwargs)
 
@@ -47,6 +47,11 @@ class AbstractDQNAgent(Agent):
         self.target_model_update = target_model_update
         self.delta_clip = delta_clip
         self.custom_model_objects = custom_model_objects
+
+        self.omegaStart = omega[0]
+        self.omegaEnd = omega[1]
+        self.currentOmega=self.omegaStart
+        self.omegaEpisodes=omega[2]
 
         # Related objects.
         self.memory = memory
@@ -102,7 +107,7 @@ class DQNAgent(AbstractDQNAgent):
             `naive`: Q(s,a;theta) = V(s;theta) + A(s,a;theta)
 
     """
-    def __init__(self, model, policy=None, test_policy=None, enable_double_dqn=False, enable_dueling_network=False,
+    def __init__(self, model, policy=None, test_policy=None, enable_double_dqn=False, enable_dueling_network=False, 
                  dueling_type='avg', *args, **kwargs):
         super(DQNAgent, self).__init__(*args, **kwargs)
 

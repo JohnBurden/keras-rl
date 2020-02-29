@@ -58,7 +58,7 @@ class Agent(object):
         return {}
 
     def fit(self, env, nb_steps, action_repetition=1, callbacks=None, verbose=1,
-            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None, omega=0,
+            visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None,
             nb_max_episode_steps=None, projectionModel=None):
         """Trains the agent on the given environment.
 
@@ -390,7 +390,8 @@ class Agent(object):
                     #print(omega*self.accumulatedExtrinsicReward)
                     #print(self.accumulatedExtrinsicReward)
                     #print(self.accumulatedExtrinsicReward)
-                    metrics = self.backward(reward+omega*self.accumulatedExtrinsicReward, terminal=done)
+                    #print(self.currentOmega)
+                    metrics = self.backward(reward+self.currentOmega*self.accumulatedExtrinsicReward, terminal=done)
                 elif fittingMode in ["learnAMDP"]:
                     metrics = self.backward(reward, terminal=done)
                     if self.step > self.nb_steps_warmup:
@@ -430,6 +431,10 @@ class Agent(object):
                     callbacks.on_episode_end(episode, episode_logs)
 
                     episode += 1
+
+                    if self.omegaStart > 0:
+                        self.currentOmega = max(self.omegaStart + (episode/self.omegaEpisodes)*(self.omegaEnd - self.omegaStart), self.omegaEnd)
+
                     observation = None
                     episode_step = None
                     episode_reward = None
@@ -615,14 +620,14 @@ class Agent(object):
         callbacks.on_train_end()
         self._on_test_end()
 
-        print(episodeObservationHistory)
+        #print(episodeObservationHistory)
 
         with open('observationHistory.pickle', 'wb') as handle:
             pickle.dump(episodeObservationHistory, handle, pickle.HIGHEST_PROTOCOL)
 
-        with open('observationHistory.pickle', 'rb') as handle:
-            eoh = pickle.load(handle)
-            print(len(eoh))
+     #   with open('observationHistory.pickle', 'rb') as handle:
+      #      eoh = pickle.load(handle)
+       #     print(len(eoh))
 
         return history
 
