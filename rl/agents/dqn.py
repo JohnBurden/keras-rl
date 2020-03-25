@@ -119,6 +119,7 @@ class DQNAgent(AbstractDQNAgent):
             raise ValueError('Model output "{}" has invalid shape. DQN expects a model that has one dimension for each action, in this case {}.'.format(model.output, self.nb_actions))
   
         # Parameters.
+        self.episode=0
         self.enable_double_dqn = enable_double_dqn
         self.enable_dueling_network = enable_dueling_network
         self.dueling_type = dueling_type
@@ -134,7 +135,7 @@ class DQNAgent(AbstractDQNAgent):
             # dueling_type == 'avg'
             # Q(s,a;theta) = V(s;theta) + (A(s,a;theta)-Avg_a(A(s,a;theta)))
             # dueling_type == 'max'
-            # Q(s,a;theta) = V(s;theta) + (A(s,a;theta)-max_a(A(s,a;theta)))
+            # Q(s,a;theta) = V(s;theta) + (A(s,a;theta)-max_a(episodeToBegA(s,a;theta)))
             # dueling_type == 'naive'
             # Q(s,a;theta) = V(s;theta) + A(s,a;theta)
             if self.dueling_type == 'avg':
@@ -245,10 +246,10 @@ class DQNAgent(AbstractDQNAgent):
 
         return action
 
-    def backward(self, reward, terminal):
+    def backward(self, reward, shapedReward, terminal):
         # Store most recent experience in memory.
         if self.step % self.memory_interval == 0:
-            self.memory.append(self.recent_observation, self.recent_action, reward, terminal,
+            self.memory.append(self.recent_observation, self.recent_action, reward, shapedReward, terminal,
                                training=self.training)
 
         metrics = [np.nan for _ in self.metrics_names]
@@ -258,13 +259,16 @@ class DQNAgent(AbstractDQNAgent):
             return metrics
 
         # Train the network on a single stochastic batch.
-        if self.step > self.nb_steps_warmup and self.step % self.train_interval == 0:
+        if self.step > self.nb_steps_warmup and self.step % self.train_interval == 0 and self.step> self.extraWarmup+self.stepToBegin:
+           # print("BEGIN TRAINING")
+           # print(self.step)
             experiences = self.memory.sample(self.batch_size)
             assert len(experiences) == self.batch_size
 
             # Start by extracting the necessary parameters (we use a vectorized implementation).
             state0_batch = []
             reward_batch = []
+            shaped_reward_batch = []
             action_batch = []
             terminal1_batch = []
             state1_batch = []
@@ -272,6 +276,7 @@ class DQNAgent(AbstractDQNAgent):
                 state0_batch.append(e.state0)
                 state1_batch.append(e.state1)
                 reward_batch.append(e.reward)
+                shaped_reward_batch.append(e.shapedReward)
                 action_batch.append(e.action)
                 terminal1_batch.append(0. if e.terminal1 else 1.)
 
@@ -280,6 +285,7 @@ class DQNAgent(AbstractDQNAgent):
             state1_batch = self.process_state_batch(state1_batch)
             terminal1_batch = np.array(terminal1_batch)
             reward_batch = np.array(reward_batch)
+            shaped_reward_batch=np.array(shaped_reward_batch)
             assert reward_batch.shape == (self.batch_size,)
             assert terminal1_batch.shape == reward_batch.shape
             assert len(action_batch) == len(reward_batch)
@@ -318,7 +324,13 @@ class DQNAgent(AbstractDQNAgent):
             # Set discounted reward to zero for all states that were terminal.
             discounted_reward_batch *= terminal1_batch
             assert discounted_reward_batch.shape == reward_batch.shape
-            Rs = reward_batch + discounted_reward_batch
+            if self.useShaping:
+                #print("Using Shaping From Shaped Batch")
+                Rs = shaped_reward_batch + discounted_reward_batch
+            else:
+                #print("Not using Shaping using normal batch")
+                Rs = reward_batch + discounted_reward_batch
+                
             for idx, (target, mask, R, action) in enumerate(zip(targets, masks, Rs, action_batch)):
                 target[action] = R  # update action with estimated accumulated reward
                 dummy_targets[idx] = R
@@ -335,6 +347,9 @@ class DQNAgent(AbstractDQNAgent):
             metrics += self.policy.metrics
             if self.processor is not None:
                 metrics += self.processor.metrics
+
+        #elif self.step % self.train_interval==0:
+         #   print("WARMUP STAGE")
 
         if self.target_model_update >= 1 and self.step % self.target_model_update == 0:
             self.update_target_model_hard()

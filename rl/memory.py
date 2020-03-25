@@ -8,7 +8,7 @@ import numpy as np
 
 # This is to be understood as a transition: Given `state0`, performing `action`
 # yields `reward` and results in `state1`, which might be `terminal`.
-Experience = namedtuple('Experience', 'state0, action, reward, state1, terminal1')
+Experience = namedtuple('Experience', 'state0, action, reward, shapedReward, state1, terminal1')
 
 
 def sample_batch_indexes(low, high, size):
@@ -113,7 +113,7 @@ class Memory(object):
     def sample(self, batch_size, batch_idxs=None):
         raise NotImplementedError()
 
-    def append(self, observation, action, reward, terminal, training=True):
+    def append(self, observation, action, reward, shapedReward, terminal, training=True):
         self.recent_observations.append(observation)
         self.recent_terminals.append(terminal)
 
@@ -165,6 +165,7 @@ class SequentialMemory(Memory):
         # it is way too slow on random access. Instead, we use our own ring buffer implementation.
         self.actions = RingBuffer(limit)
         self.rewards = RingBuffer(limit)
+        self.shapedRewards = RingBuffer(limit)
         self.terminals = RingBuffer(limit)
         self.observations = RingBuffer(limit)
 
@@ -222,7 +223,11 @@ class SequentialMemory(Memory):
             while len(state0) < self.window_length:
                 state0.insert(0, zeroed_observation(state0[0]))
             action = self.actions[idx - 1]
+
             reward = self.rewards[idx - 1]
+            shapedReward = self.shapedRewards[idx-1]
+
+
             terminal1 = self.terminals[idx - 1]
 
             # Okay, now we need to create the follow-up state. This is state0 shifted on timestep
@@ -233,12 +238,12 @@ class SequentialMemory(Memory):
 
             assert len(state0) == self.window_length
             assert len(state1) == len(state0)
-            experiences.append(Experience(state0=state0, action=action, reward=reward,
+            experiences.append(Experience(state0=state0, action=action, reward=reward, shapedReward=shapedReward,
                                           state1=state1, terminal1=terminal1))
         assert len(experiences) == batch_size
         return experiences
 
-    def append(self, observation, action, reward, terminal, training=True):
+    def append(self, observation, action, reward, shapedReward, terminal, training=True):
         """Append an observation to the memory
 
         # Argument
@@ -247,7 +252,7 @@ class SequentialMemory(Memory):
             reward (float): Reward obtained by taking this action
             terminal (boolean): Is the state terminal
         """ 
-        super(SequentialMemory, self).append(observation, action, reward, terminal, training=training)
+        super(SequentialMemory, self).append(observation, action, reward, shapedReward, terminal, training=training)
         
         # This needs to be understood as follows: in `observation`, take `action`, obtain `reward`
         # and weather the next state is `terminal` or not.
@@ -255,6 +260,7 @@ class SequentialMemory(Memory):
             self.observations.append(observation)
             self.actions.append(action)
             self.rewards.append(reward)
+            self.shapedRewards.append(shapedReward)
             self.terminals.append(terminal)
 
     @property

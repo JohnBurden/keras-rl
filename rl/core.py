@@ -59,7 +59,7 @@ class Agent(object):
 
     def fit(self, env, nb_steps, action_repetition=1, callbacks=None, verbose=1,
             visualize=False, nb_max_start_steps=0, start_step_policy=None, log_interval=10000, useShaping=False, learnAMDP=False, stateToBucket=None, vae=None, shapingFunction=None,
-            nb_max_episode_steps=None, projectionModel=None):
+            nb_max_episode_steps=None, projectionModel=None, episodeToBegin=0, stepToBegin=0, extraWarmup=0, doTraining=True):
         """Trains the agent on the given environment.
 
         # Arguments
@@ -111,8 +111,8 @@ class Agent(object):
         if action_repetition < 1:
             raise ValueError('action_repetition must be >= 1, is {}'.format(action_repetition))
 
-       
-        self.training = True
+        self.useShaping = useShaping
+        self.training = doTraining
         self.stateToBucket = stateToBucket
         if not projectionModel is None:
             self.projectionModel= projectionModel[0]
@@ -127,6 +127,8 @@ class Agent(object):
         sess = vae[0]
         vaeNetwork = vae[1]
         self.printVae = False
+
+        self.extraWarmup = extraWarmup
 
         callbacks = [] if not callbacks else callbacks[:]
 
@@ -154,8 +156,9 @@ class Agent(object):
         self._on_train_begin()
         callbacks.on_train_begin()
 
-        episode = np.int16(0)
-        self.step = np.int16(0)
+        self.stepToBegin = stepToBegin
+        self.episode = episodeToBegin
+        self.step = stepToBegin
         self.neg_reward_counter = np.int16(0)
         self.max_neg_rewards = np.int16(12)
         observation = None
@@ -178,7 +181,7 @@ class Agent(object):
         try:
             while self.step < nb_steps:
                 if observation is None:  # start of a new episode
-                    callbacks.on_episode_begin(episode)
+                    callbacks.on_episode_begin(self.episode)
                     previousObservation = None
 
                     episode_step = np.int16(0)
@@ -353,8 +356,8 @@ class Agent(object):
                             
                         
 
-                                    latentCurrentState = latentCurrentState.reshape((-1,4,4))
-                                    latentPreviousState = latentPreviousState.reshape((-1,4,4))
+                                    latentCurrentState = latentCurrentState.reshape((-1,4,32))
+                                    latentPreviousState = latentPreviousState.reshape((-1,4,32))
                                     #print(np.array(latentCurrentState).shape)
                                         
                                     potentialCurrentLatentState = max(self.shapingModel.predict(latentCurrentState)[0])
@@ -390,14 +393,15 @@ class Agent(object):
                     #print(omega*self.accumulatedExtrinsicReward)
                     #print(self.accumulatedExtrinsicReward)
                     #print(self.accumulatedExtrinsicReward)
-                    #print(self.currentOmega)
-                    metrics = self.backward(reward+self.currentOmega*self.accumulatedExtrinsicReward, terminal=done)
+                   
+
+                    metrics = self.backward(reward, reward+self.currentOmega*self.accumulatedExtrinsicReward, terminal=done)
                 elif fittingMode in ["learnAMDP"]:
-                    metrics = self.backward(reward, terminal=done)
+                    metrics = self.backward(reward, reward, terminal=done)
                     if self.step > self.nb_steps_warmup:
                         self.amdp.replay()
                 else:
-                    metrics = self.backward(reward, terminal=done)
+                    metrics = self.backward(reward, reward, terminal=done)
                 #
                 episode_reward += reward
 
@@ -406,7 +410,7 @@ class Agent(object):
                     'observation': observation,
                     'reward': reward,
                     'metrics': metrics,
-                    'episode': episode,
+                    'episode': self.episode,
                     'info': accumulated_info,
                 }
                 callbacks.on_step_end(episode_step, step_logs)
@@ -420,7 +424,7 @@ class Agent(object):
                     # the *next* state, that is the state of the newly reset environment, is
                     # always non-terminal by convention.
                     self.forward(observation)
-                    self.backward(0., terminal=False)
+                    self.backward(0., 0., terminal=False)
 
                     # This episode is finished, report and reset.
                     episode_logs = {
@@ -428,12 +432,18 @@ class Agent(object):
                         'nb_episode_steps': episode_step,
                         'nb_steps': self.step,
                     }
-                    callbacks.on_episode_end(episode, episode_logs)
+                    callbacks.on_episode_end(self.episode, episode_logs)
 
-                    episode += 1
+                    self.episode += 1
 
                     if self.omegaStart > 0:
-                        self.currentOmega = max(self.omegaStart + (episode/self.omegaEpisodes)*(self.omegaEnd - self.omegaStart), self.omegaEnd)
+                        self.currentOmega = max(self.omegaStart + (self.episode/self.omegaEpisodes)*(self.omegaEnd - self.omegaStart), self.omegaEnd)
+                    #if episode > 500:
+                     #   self.currentOmega = 0
+                      #  self.omegaStart = 0
+                       # self.omegaEnd = 0
+
+                        #print(self.currentOmega)
 
                     observation = None
                     episode_step = None
@@ -589,7 +599,7 @@ class Agent(object):
                     reward += punishment
                 done = done or early_done
 
-                self.backward(reward, terminal=done)
+                self.backward(reward, reward, terminal=done)
                 episode_reward += reward
 
                 step_logs = {
@@ -609,7 +619,7 @@ class Agent(object):
             # the *next* state, that is the state of the newly reset environment, is
             # always non-terminal by convention.
             self.forward(observation)
-            self.backward(0., terminal=False)
+            self.backward(0., 0., terminal=False)
             episodeObservationHistory.append(observationHistory)
             # Report end of episode.
             episode_logs = {
